@@ -84,12 +84,14 @@ class PublishThread(threading.Thread):
         
         self.__lift_back_height = None
         self.__lift_target_height = None
-        rospy.Subscriber('/LiftingMotorMsg', LiftMotorMsg, self.__lift_motor_callback)
-        rospy.wait_for_message('/LiftingMotorMsg', LiftMotorMsg)
+        self.__lift_done = False
+        rospy.Subscriber('/lifter_1/LiftMotorStatePub', LiftMotorMsg, self.__lift_motor_callback)
+        rospy.wait_for_message('/lifter_1/LiftMotorStatePub', LiftMotorMsg)
         self.__lift_done = True
-        rospy.wait_for_service('/LiftingMotorService')
-        self.__lift_motor_service = rospy.ServiceProxy('/LiftingMotorService', LiftMotorSrv)
+        rospy.wait_for_service('/lifter_1/LiftingMotorService')
+        self.__lift_motor_service = rospy.ServiceProxy('/lifter_1/LiftingMotorService', LiftMotorSrv)
         
+        self.__status = 0
         self.__x = 0.0
         self.__y = 0.0
         self.__z = 0.0
@@ -99,6 +101,8 @@ class PublishThread(threading.Thread):
         self.__lift_step = 0
         self.__condition = threading.Condition()
         self.__done = False
+        
+        self.__terminal_output_cache = []
 
         # Set timeout to None if rate is 0 (causes new_message to wait forever
         # for new data to publish)
@@ -171,12 +175,17 @@ class PublishThread(threading.Thread):
             # Lift motor control
             lift_motor_height = max(lift_range[0], min(lift_range[1], lift_motor_height))
             if lift_motor_height != self.__lift_target_height:
+                if self.__lift_back_height < 10:
+                    req = LiftMotorSrvRequest()
+                    req.mode = -4
+                    req.val = 100
+                    res:LiftMotorSrvResponse = self.__lift_motor_service(req)
                 req = LiftMotorSrvRequest()
                 req.mode = 0
                 req.val = lift_motor_height
+                self.__terminal_output_cache.append(f'Lift motor move from {self.__lift_target_height} mm to {lift_motor_height} mm')
                 res:LiftMotorSrvResponse = self.__lift_motor_service(req)
                 self.__lift_done = False
-                print(f'Lift motor move from {self.__lift_target_height} mm to {lift_motor_height} mm')
 
         # Publish stop message when thread exits.
         twist.linear.x = 0
@@ -191,8 +200,17 @@ class PublishThread(threading.Thread):
         self.__lift_back_height = msg.backHeight
         self.__lift_target_height = msg.targetHeight
         if (not self.__lift_done) and (self.__lift_back_height == self.__lift_target_height):
-            print(f'Lift motor has reached target height: {self.__lift_target_height}')
             self.__lift_done = True
+            
+    def update_status(self):
+        if self.__status == 14:
+            print(msg)
+        self.__status = (self.__status + 1) % 15
+        
+    def print_terminal_output(self):
+        while len(self.__terminal_output_cache) > 0:
+            print(self.__terminal_output_cache.pop(0))
+            self.update_status()
 
 def getKey(key_timeout):
     tty.setraw(sys.stdin.fileno())
@@ -236,7 +254,14 @@ if __name__=="__main__":
         print(msg)
         print(vels(speed,turn,lift_step))
         while(1):
+            
             key = getKey(key_timeout)
+            pub_thread.print_terminal_output()
+            if (key_timeout == 0) or key_timeout is None:
+                x = 0
+                y = 0
+                z = 0
+                th = 0
             if key in moveBindings.keys():
                 x = moveBindings[key][0]
                 y = moveBindings[key][1]
@@ -247,14 +272,13 @@ if __name__=="__main__":
                 turn = turn * speedBindings[key][1]
 
                 print(vels(speed,turn,lift_step))
-                if (status == 14):
-                    print(msg)
-                status = (status + 1) % 15
+                pub_thread.update_status()
             elif key in stepBindings.keys():
                 lift_step_ = lift_step * stepBindings[key][0]
                 if (lift_step_ >= 1) and (lift_step_ <= (lift_range[1] - lift_range[0])):
                     lift_step = lift_step_
                     print(vels(speed,turn,lift_step))
+                    pub_thread.update_status()
             else:
                 # Skip updating cmd_vel if key timeout and robot already
                 # stopped.
@@ -268,6 +292,8 @@ if __name__=="__main__":
                     break
  
             pub_thread.update(x, y, z, th, speed, turn, lift_step)
+            rospy.sleep(0.01)
+            pub_thread.print_terminal_output()
 
     except Exception as e:
         print(e)

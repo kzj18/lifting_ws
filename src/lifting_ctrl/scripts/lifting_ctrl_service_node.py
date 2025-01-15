@@ -478,7 +478,7 @@ class C_ROS_Server:
         # 过流保护
         if(self.ctrl.OverflowIProtect()):
             self.ctrl.MotorStop(self.JudgeMotorDirection(), self.motor_states, force=True)
-            rospy.logwarn("电机电流超过",self.ctrl.GetOverflowILimit(),"A并且反馈速度为0，判定是卡住")
+            rospy.logwarn(f'电机电流超过 {self.ctrl.GetOverflowILimit()} A并且反馈速度为0，判定是卡住')
             self.target_speed = 0
             self.ctrl.LiftMoveSpd(self.target_speed)
             self.ctrl.MotorStop(self.JudgeMotorDirectionWithSpeed(), self.motor_states, force=True)
