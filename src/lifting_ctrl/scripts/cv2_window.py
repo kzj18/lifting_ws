@@ -110,8 +110,10 @@ class CV2Window:
         
         self.__done = False
         self.__condition = threading.Condition()
-        self.__publish_thread = threading.Thread(target=self.__publish_thread_main, args=(repeat,))
-        self.__publish_thread.start()
+        self.__twist_publish_thread = threading.Thread(target=self.__twist_publish_thread_main, args=(repeat,))
+        self.__twist_publish_thread.start()
+        self.__lift_motor_publish_thread = threading.Thread(target=self.__lift_motor_publish_thread_main, args=(repeat,))
+        self.__lift_motor_publish_thread.start()
         
         cv2.namedWindow('frame', cv2.WINDOW_NORMAL)
 
@@ -174,9 +176,10 @@ class CV2Window:
             self.__turn = 0.0
             self.__lift_step = 0
             self.__condition.notify_all()
-        self.__publish_thread.join()
+        self.__twist_publish_thread.join()
+        self.__lift_motor_publish_thread.join()
         
-    def __publish_thread_main(self, rate):
+    def __twist_publish_thread_main(self, rate):
         twist = Twist()
         
         if rate != 0.0:
@@ -196,11 +199,32 @@ class CV2Window:
                 twist.angular.x = 0
                 twist.angular.y = 0
                 twist.angular.z = self.__th * self.__turn
-                
-                lift_motor_height = int(self.__lift_target_height + self.__z * self.__lift_step)
 
             # Publish.
             self.__publisher.publish(twist)
+
+        # Publish stop message when thread exits.
+        twist.linear.x = 0
+        twist.linear.y = 0
+        twist.linear.z = 0
+        twist.angular.x = 0
+        twist.angular.y = 0
+        twist.angular.z = 0
+        self.__publisher.publish(twist)
+        
+    def __lift_motor_publish_thread_main(self, rate):
+        
+        if rate != 0.0:
+            timeout = 1.0 / rate
+        else:
+            timeout = None
+        
+        while not self.__done:
+            with self.__condition:
+                # Wait for a new message or timeout.
+                self.__condition.wait(timeout)
+                
+                lift_motor_height = int(self.__lift_target_height + self.__z * self.__lift_step)
             
             # Lift motor control
             lift_motor_height = max(lift_range[0], min(lift_range[1], lift_motor_height))
@@ -216,15 +240,6 @@ class CV2Window:
                 print(f'Lift motor move from {self.__lift_target_height} mm to {lift_motor_height} mm')
                 res:LiftMotorSrvResponse = self.__lift_motor_service(req)
                 self.__lift_done = False
-
-        # Publish stop message when thread exits.
-        twist.linear.x = 0
-        twist.linear.y = 0
-        twist.linear.z = 0
-        twist.angular.x = 0
-        twist.angular.y = 0
-        twist.angular.z = 0
-        self.__publisher.publish(twist)
         
     def __frame_callback(self, image: Image):
         frame = np.frombuffer(image.data, dtype=np.uint8).reshape(image.height, image.width, -1)

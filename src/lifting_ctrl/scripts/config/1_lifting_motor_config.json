@@ -8,7 +8,7 @@
     "motorSpd":1500,
     "motorTime":0,
     "callBackMode":0,
-    "upLimitVal":600,
+    "upLimitVal":700,
     "downLimitVal":0,
     "initSpd":-800,
     "initPos":0,
