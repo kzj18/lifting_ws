@@ -229,7 +229,7 @@ class CV2Window:
             # Lift motor control
             lift_motor_height = max(lift_range[0], min(lift_range[1], lift_motor_height))
             if lift_motor_height != self.__lift_target_height:
-                if self.__lift_back_height < 10:
+                while self.__lift_back_height < 10:
                     req = LiftMotorSrvRequest()
                     req.mode = -4
                     req.val = 100
