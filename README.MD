@@ -37,7 +37,7 @@ sudo cp ttyUSB_permission.rules /etc/udev/rules.d/
 
 ```bash
 cd lifting_ws
-catkin_make
+catkin_make -DPYTHON_EXECUTABLE=/usr/bin/python3
 ```
 
 ## run
