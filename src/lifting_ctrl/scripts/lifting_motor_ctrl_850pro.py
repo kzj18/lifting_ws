@@ -64,8 +64,9 @@ class C_DealDataBase():
             # print(txdata)
             # 串口接收
             rxdata = self.sensor_serial.PortReadContinuousData(auto_open=False, data_len=data_length)
+            # rxdata = self.sensor_serial.PortReadAllData(auto_open=False)
             # rxdata = self.sensor_serial.PortReadSizeData(auto_open=False)
-            self.sensor_serial.PortClose()
+            # self.sensor_serial.PortClose()
         return rxdata
     def DealAllData(self, tx_list:list, crc_data_len:int, crc_flag:bool=True, port_name=None, rxdata_len:int=-2, wait_time:int = 0):
         '''
@@ -76,10 +77,13 @@ class C_DealDataBase():
         # print("------------")
         # print("1111=======22222",txdata)
         # 调用类内收发数据函数
+        # b = time.time()
         if(port_name == None):
             rxdata = self.__ReceiveAndSendSensorData(txdata, rxdata_len, wait_time)
         else: rxdata = self.__ReceiveAndSendSensorData(txdata, port_name, rxdata_len, wait_time)
-        # print("-----",rxdata)
+        # print("2==========",time.time() - b)
+        # if(rxdata[1] == 6):
+        #     print("-----",rxdata)
         rxlist = rxdata
         length = len(rxlist)
         # 如果接收到的列表不为空列表
@@ -89,7 +93,8 @@ class C_DealDataBase():
             crc16 = C_CRC().CrcSplit(16, "int", crc16)
             # 将计算的与接收到的进行校验
             if(crc16[1] == rxlist[-1] and crc16[0] == rxlist[-2]):
-                # print(rxlist)
+                # if(rxdata[1] == 6):
+                #     print("++++++++++++++",rxlist)
                 # 问讯应答帧
                 if(rxlist[1] == 0x03):
                     # 第3位为数据长度位
@@ -139,7 +144,7 @@ class C_LiftingMotorCtrl_850pro():
             self.reductionRatio = self.GetMotorJsonConfig()["reductionRatio"]
         else: self.reductionRatio = 10000
         print("设定 ",self.__motor_id, " 号电机当前减速比为: ",self.reductionRatio,"pause")
-        print("设定 ",self.__motor_id," 号电机经减速比转换后的速度最大值为: ",abs(round((self.motorSpd * 10000) / (self.reductionRatio * 60), 3)), "mm/s")
+        print("设定 ",self.__motor_id," 号电机经减速比转换后的速度最大值为: ",abs(self.CalLiftSpd(self.motorSpd)), "mm/s")
         # 电机向正向运行的最大位置
         if('upLimitVal' in self.GetMotorJsonConfig().keys()):
             self.__upLimitVal = self.GetMotorJsonConfig()["upLimitVal"]
@@ -152,21 +157,46 @@ class C_LiftingMotorCtrl_850pro():
         if('motorStallCurrent' in self.GetMotorJsonConfig().keys()):
             self.__current_limit = self.GetMotorJsonConfig()["motorStallCurrent"]
         else: self.__current_limit = 11
+        if('initSpd' in self.GetMotorJsonConfig().keys()):
+            self.initSpd = self.GetMotorJsonConfig()["initSpd"]
+        else: self.initSpd = -100
         # 创建电机消息类
         self.__motor_msgs = self.motor_msg()
         self.__motor_msgs = self.ReadMotorData()
         self.stop_flag:bool = False
         # 初始化目标位置和目标高度
         if isinstance(self.__motor_msgs, self.motor_msg):
-            self._target_pos = self.__motor_msgs.back_pos
-            self._target_height = self.__motor_msgs.back_lift_height
+            self.SetTargetHeight(self.__motor_msgs.back_lift_height, True)
         else: 
-            self._target_pos = 0
-            self._target_height = 0
+            self.SetTargetHeight(0, True)
         self.motor_list = []
         self.limit_list = []
         self.offset = 0
+    
+    def CalRealMotorSpd(self, origin_spd):
+        '''
+        round(origin_spd * 3000 / 8192)
+        '''
+        return round(origin_spd * 3000 / 8192)
 
+    def ConvertSendRealSpdVal(self, send_spd):
+        '''
+        round(send_spd * 8192 / 3000)
+        '''
+        return round(send_spd * 8192 / 3000)
+
+    def CalLiftSpd(self, motor_spd):
+        '''
+        round((motorSpd * 10000) / (self.reductionRatio * 60))
+        '''
+        return round((motor_spd * 10000) / (self.reductionRatio * 60))
+
+    def LiftSpdConvertToMotorSpd(self, lift_spd):
+        '''
+        round((lift_spd * self.reductionRatio * 60) / 10000)
+        '''
+        return round((lift_spd * self.reductionRatio * 60) / 10000)
+    
     def MotorInit(self, motor_id:int):
         self.__init__(motor_id)
 
@@ -189,12 +219,39 @@ class C_LiftingMotorCtrl_850pro():
         return self.__deal_data.GetPortJsonConfig()
     def GetLiftPortName(self):
         return self.__port_name
-    def GetPosOffset(self):
-        return self.pos_offset
     def GetMotorMaxSpd(self):
         return self.motorSpd
     def GetOverflowILimit(self):
         return self.__current_limit
+    def GetInitSpdSigned(self):
+        if self.initSpd >= 0:
+            return 1
+        else:
+            return -1
+    def SetTargetPos(self, pos:int):
+        self._target_pos = pos
+    def GetTargetPos(self):
+        return self._target_pos
+    def SetTargetHeight(self, height:int, force_set:bool=False):
+        '''
+        设定目标高度值，循环限幅
+        '''
+        if(not force_set):
+            if(height > self.GetUpLimitHeight()): self._target_height = self.GetUpLimitHeight()
+            elif(height < self.GetDownLimitHeight()): self._target_height = self.GetDownLimitHeight()
+            else: self._target_height = height
+        else: self._target_height = height
+        target_pos = round(self.reductionRatio * self._target_height)
+        self.SetTargetPos(target_pos)
+        return self._target_height
+    
+    def GetTargetHeight(self):
+        return self._target_height
+    
+    def GetUpLimitHeight(self):
+        return self.__upLimitVal
+    def GetDownLimitHeight(self):
+        return self.__downLimitVal
     def JudgeCurrentMotorPort(self, ignore_port:str=None):
         workable_port_list = C_DealDataBase(self.__motor_id).GetWorkablePort()
         print(workable_port_list)
@@ -261,28 +318,36 @@ class C_LiftingMotorCtrl_850pro():
         # 赋值控制模式始终为1
         self.motor_list = [0,1]
         txlist = [self.__motor_id, 0x03, 0x00, 0xE1, 0x00, 0x02]
+        # a = time.time()
         tmp = self.__deal_data.DealAllData(txlist, 6, True, self.__port_name)
-        time.sleep(0.01)
+        # print("1-----------------",time.time() - a)
+        # time.sleep(0.01)
         if(tmp is not None):
             self.motor_list = self.motor_list + tmp
             txlist = [self.__motor_id, 0x03, 0x00, 0xE3, 0x00, 0x02]
+            # b = time.time()
             tmp = self.__deal_data.DealAllData(txlist, 6, True, self.__port_name)
-            time.sleep(0.01)
+            # print("2-----------------",time.time() - b)
+            # time.sleep(0.01)
             if(tmp is not None):
                 self.motor_list =  self.motor_list + tmp
                 # 将定位完成位始终赋值为1
                 self.motor_list =  self.motor_list + [0, 1]
                 txlist = [self.__motor_id, 0x03, 0x00, 0xE6, 0x00, 0x02]
+                # b = time.time()
                 tmp = self.__deal_data.DealAllData(txlist, 6, True, self.__port_name)
-                time.sleep(0.01)
+                # print("3-----------------",time.time() - b)
+                # time.sleep(0.01)
                 if(tmp is not None):
                     self.motor_list =  self.motor_list + tmp
                     txlist = [self.__motor_id, 0x03, 0x00, 0xE8, 0x00, 0x02]
+                    # b = time.time()
                     tmp = self.__deal_data.DealAllData(txlist, 6, True, self.__port_name)
-                    time.sleep(0.01)
+                    # print("4-----------------",time.time() - b)
+                    # time.sleep(0.01)
                     if(tmp is not None):
                         self.motor_list =  self.motor_list + tmp
-        # self.motor_list = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+        # print("5-----------------",time.time() - a)
         self.limit_list = self.ReadMotorLimitData()
         # self.limit_list = [False,False]
         # print("+++++",self.motor_list)
@@ -293,12 +358,12 @@ class C_LiftingMotorCtrl_850pro():
                 self.__motor_msgs = self.motor_msg()
                 backPos = (int)((self.motor_list[-4]<<24) + (self.motor_list[-3]<<16) + (self.motor_list[-2]<<8) + (self.motor_list[-1]))
                 self.__motor_msgs.back_pos = convert_to_valid_32bit(backPos)
-                self.__motor_msgs.back_lift_height = round((self.__motor_msgs.back_pos-self.__deal_data.GetPortJsonConfig()["posOffset"]) / self.reductionRatio)
+                self.__motor_msgs.back_lift_height = round(self.__motor_msgs.back_pos / self.reductionRatio)
                 target_pos = (self.motor_list[-8]<<24) + (self.motor_list[-7]<<16) + (self.motor_list[-6]<<8) + (self.motor_list[-5])
                 self.__motor_msgs.target_pos = convert_to_valid_32bit(target_pos)
                 self.__motor_msgs.location_complete = self.motor_list[11]
                 back_speed = (self.motor_list[8]<<8) + (self.motor_list[9])
-                self.__motor_msgs.back_speed = convert_to_valid_16bit(back_speed)
+                self.__motor_msgs.back_speed = self.CalRealMotorSpd(convert_to_valid_16bit(back_speed))
                 self.__motor_msgs.state_bit = self.motor_list[7]
                 self.__motor_msgs.back_current = ((self.motor_list[4]<<8) + (self.motor_list[5])) / 100
                 self.__motor_msgs.back_vol = self.motor_list[3]
@@ -318,22 +383,6 @@ class C_LiftingMotorCtrl_850pro():
         rxdata =  self.__deal_data.DealAllData(txlist, 6, True, self.__port_name)
         return rxdata
     
-    def SetTargetHeight(self, height:int):
-        '''
-        设定目标高度值，循环限幅
-        '''
-        if(height > self.__upLimitVal): self._target_height = self.__upLimitVal
-        elif(height < self.__downLimitVal): self._target_height = self.__downLimitVal
-        else: self._target_height = height
-        # self._target_pos = self.__motor_msgs.back_pos
-        return self._target_height
-    
-    def GetTargetHeight(self):
-        return self._target_height
-    
-    def GetTargetPos(self):
-        return self._target_pos
-    
     def LiftMovePos(self, height:int):
         '''
         运动升降柱指定高度
@@ -342,11 +391,9 @@ class C_LiftingMotorCtrl_850pro():
         # 0x01, 0x10, 0x00, 0x50, 0x00, 0x02, 0x04, 0x00, 0x00, 0x27, 0x10 #+10000
         height = self.SetTargetHeight(height)
         # 电机转10937.5脉冲，升降柱末端升高1mm
-        pause = round(self.reductionRatio * height) + self.__deal_data.GetPortJsonConfig()["posOffset"]
-        self._target_pos = pause
-        self.MotorMovePos(self._target_pos)
+        self.MotorMovePos(self.GetTargetPos())
         if isinstance(self.__motor_msgs, self.motor_msg):
-            if(abs(self.__motor_msgs.back_lift_height - self._target_height)<5):
+            if(abs(self.__motor_msgs.back_lift_height - self.GetTargetHeight())<5):
                 return True
         else: return False
 
@@ -375,8 +422,7 @@ class C_LiftingMotorCtrl_850pro():
                 # self.MotorClearPosZero()
             self.__motor_msgs = self.ReadMotorData()
             if isinstance(self.__motor_msgs, self.motor_msg):
-                self._target_pos = self.__motor_msgs.back_pos
-                self._target_height = self.__motor_msgs.back_lift_height
+                self.SetTargetHeight(self.__motor_msgs.back_lift_height, True)
             return True
     
     def LiftTimeoutInit(self, timeout_flag:bool, motor_state:motor_msg):
@@ -393,8 +439,7 @@ class C_LiftingMotorCtrl_850pro():
                     self.MotorClearCircle()
         self.__motor_msgs = self.ReadMotorData()
         if isinstance(self.__motor_msgs, self.motor_msg):
-            self._target_pos = self.__motor_msgs.back_pos
-            self._target_height = self.__motor_msgs.back_lift_height
+            self.SetTargetHeight(self.__motor_msgs.back_lift_height, True)
         return True
         
     def MotorMovePos(self, pause:int):
@@ -448,7 +493,7 @@ class C_LiftingMotorCtrl_850pro():
                     elif((motor_state.upLimit)):
                         self.SetStopFlag(True)
                     
-                    if(motor_state.back_lift_height >= self.__upLimitVal):
+                    if(motor_state.back_lift_height >= self.GetUpLimitHeight()):
                         self.SetStopFlag(True)
                     else: 
                         self.SetStopFlag(False)
@@ -459,13 +504,13 @@ class C_LiftingMotorCtrl_850pro():
                         self.SetStopFlag(False)
                     elif((motor_state.downLimit)):
                         self.SetStopFlag(True)
-                    if(motor_state.back_lift_height <= self.__downLimitVal):
+                    if(motor_state.back_lift_height <= self.GetDownLimitHeight()):
                         self.SetStopFlag(True)
                     else: 
                         self.SetStopFlag(False)
             # 如果电机方向为0，也就是发送的目标位置和当前位置相同，也不停止电机
             elif(direction==0):
-                if(motor_state.back_lift_height > self.__downLimitVal and motor_state.back_lift_height < self.__upLimitVal):
+                if(motor_state.back_lift_height > self.GetDownLimitHeight() and motor_state.back_lift_height < self.GetUpLimitHeight()):
                     self.SetStopFlag(False)
                 else:
                     self.SetStopFlag(True)
@@ -487,29 +532,33 @@ class C_LiftingMotorCtrl_850pro():
         if(self.mode_switch_flag != "spd"):
             self.MotorSetSpdCtrl()
             self.mode_switch_flag = "spd"
+            print("========Switch to SPD Mode========")
         if(motor_speed > self.motorSpd): motor_speed = self.motorSpd
         elif(motor_speed < -self.motorSpd): motor_speed = -self.motorSpd
+        motor_speed = self.ConvertSendRealSpdVal(motor_speed)
         # print(motor_speed)
         # 停止标志位为true，速度为0
         if(self.stop_flag): motor_speed = 0
         # print(self.stop_flag)
+        # print(motor_speed)
         speed = []
         speed.append(((motor_speed&0xFF00)>>8)&0xFF)
-        speed.append(((motor_speed&0xFF)&0xFF))
+        speed.append(((motor_speed&0x00FF)&0xFF))
         # print('令电机以',motor_speed,'rpm','运动')
         txlist = [self.__motor_id, 0x06, 0x00, 0x06] + speed 
         # print(txlist)
         rxdata =  self.__deal_data.DealAllData(txlist, 6, True, self.__port_name)
+        # print(rxdata)
         if isinstance(self.__motor_msgs, self.motor_msg):
             if(abs(self.__motor_msgs.back_speed - motor_speed) < 1): 
                 return True
         else: return False
 
     def LiftMoveSpd(self, lift_speed:int):
-        lift_end_spd_max = abs((self.motorSpd * 10000) / (self.reductionRatio * 60))
+        lift_end_spd_max = abs(self.CalLiftSpd(self.motorSpd))
         if(lift_speed > lift_end_spd_max): lift_speed = lift_end_spd_max
         elif(lift_speed < -lift_end_spd_max): lift_speed = -lift_end_spd_max
-        lift_speed = round((lift_speed * self.reductionRatio * 60)/10000)
+        lift_speed = self.LiftSpdConvertToMotorSpd(lift_speed)
         self.MotorMoveSpd(lift_speed)
     
     def MotorZeroPos(self):
@@ -607,12 +656,10 @@ class C_LiftingMotorCtrl_850pro():
         '''
         设置电机在位置模式下最大速度
         '''
-        # 0x01, 0x10, 0x00, 0x50, 0x00, 0x02, 0x04, 0xFF, 0xFF, 0xD8, 0xF0 #-10000
-        # 0x01, 0x10, 0x00, 0x50, 0x00, 0x02, 0x04, 0x00, 0x00, 0x27, 0x10 #+10000
         if(max_spd>self.motorSpd): max_spd = self.motorSpd
         if(max_spd<-self.motorSpd): max_spd = -self.motorSpd
-        # max_speed = round((max_spd / 3000) * 8192)
         max_speed = max_spd
+        max_speed = self.ConvertSendRealSpdVal(max_speed)
         maxSpd = []
         maxSpd.append(((max_speed&0xFF00)>>8)&0xFF)
         maxSpd.append(((max_speed&0xFF)&0xFF))
